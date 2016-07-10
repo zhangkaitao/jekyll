@@ -1,76 +1,80 @@
 module Jekyll
+  module Commands
+    class Build < Command
+      class << self
+        # Create the Mercenary command for the Jekyll CLI for this Command
+        def init_with_program(prog)
+          prog.command(:build) do |c|
+            c.syntax      "build [options]"
+            c.description "Build your site"
+            c.alias :b
 
-  class BuildCommand < Command
-    def self.process(options)
-      site = Jekyll::Site.new(options)
+            add_build_options(c)
 
-      source = options['source']
-      destination = options['destination']
-
-      if options['watch']
-        self.watch(site, options)
-      else
-        self.build(site, options)
-      end
-    end
-
-    # Private: Build the site from source into destination.
-    #
-    # site - A Jekyll::Site instance
-    # options - A Hash of options passed to the command
-    #
-    # Returns nothing.
-    def self.build(site, options)
-      source = options['source']
-      destination = options['destination']
-      puts "Building site: #{source} -> #{destination}"
-      begin
-        site.process
-      rescue Jekyll::FatalException => e
-        puts
-        puts "ERROR: YOUR SITE COULD NOT BE BUILT:"
-        puts "------------------------------------"
-        puts e.message
-        exit(1)
-      end
-      puts "Successfully generated site: #{source} -> #{destination}"
-    end
-
-    # Private: Watch for file changes and rebuild the site.
-    #
-    # site - A Jekyll::Site instance
-    # options - A Hash of options passed to the command
-    #
-    # Returns nothing.
-    def self.watch(site, options)
-      require 'directory_watcher'
-
-      source = options['source']
-      destination = options['destination']
-
-      puts "Auto-Regenerating enabled: #{source} -> #{destination}"
-
-      dw = DirectoryWatcher.new(source)
-      dw.interval = 1
-      dw.glob = self.globs(source)
-
-      dw.add_observer do |*args|
-        t = Time.now.strftime("%Y-%m-%d %H:%M:%S")
-        puts "[#{t}] regeneration: #{args.size} files changed"
-        site.process
-      end
-
-      dw.start
-
-      unless options['serving']
-        trap("INT") do
-          puts "Stopping auto-regeneration..."
-          exit 0
+            c.action do |_, options|
+              options["serving"] = false
+              Jekyll::Commands::Build.process(options)
+            end
+          end
         end
 
-        loop { sleep 1000 }
-      end
+        # Build your jekyll site
+        # Continuously watch if `watch` is set to true in the config.
+        def process(options)
+          # Adjust verbosity quickly
+          Jekyll.logger.adjust_verbosity(options)
+
+          options = configuration_from_options(options)
+          site = Jekyll::Site.new(options)
+
+          if options.fetch("skip_initial_build", false)
+            Jekyll.logger.warn "Build Warning:", "Skipping the initial build." \
+                        " This may result in an out-of-date site."
+          else
+            build(site, options)
+          end
+
+          if options.fetch("detach", false)
+            Jekyll.logger.info "Auto-regeneration:",
+              "disabled when running server detached."
+          elsif options.fetch("watch", false)
+            watch(site, options)
+          else
+            Jekyll.logger.info "Auto-regeneration:", "disabled. Use --watch to enable."
+          end
+        end
+
+        # Build your Jekyll site.
+        #
+        # site - the Jekyll::Site instance to build
+        # options - A Hash of options passed to the command
+        #
+        # Returns nothing.
+        def build(site, options)
+          t = Time.now
+          source      = options["source"]
+          destination = options["destination"]
+          incremental = options["incremental"]
+          Jekyll.logger.info "Source:", source
+          Jekyll.logger.info "Destination:", destination
+          Jekyll.logger.info "Incremental build:",
+            (incremental ? "enabled" : "disabled. Enable with --incremental")
+          Jekyll.logger.info "Generating..."
+          process_site(site)
+          Jekyll.logger.info "", "done in #{(Time.now - t).round(3)} seconds."
+        end
+
+        # Private: Watch for file changes and rebuild the site.
+        #
+        # site - A Jekyll::Site instance
+        # options - A Hash of options passed to the command
+        #
+        # Returns nothing.
+        def watch(_site, options)
+          External.require_with_graceful_fail "jekyll-watch"
+          Jekyll::Watcher.watch(options)
+        end
+      end # end of class << self
     end
   end
-
 end
